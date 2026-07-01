@@ -12,6 +12,25 @@ import { useEffect, type ReactNode } from "react";
 import appCss from "../styles.css?url";
 import { reportLovableError } from "../lib/lovable-error-reporting";
 
+// ── Registro do Service Worker (PWA / suporte offline) ───────
+// Executado uma vez no cliente. O SW gerencia o cache de assets
+// e permite que o app funcione sem conexão após a primeira visita.
+function registerServiceWorker() {
+  if (typeof window === "undefined") return;
+  if (!("serviceWorker" in navigator)) return;
+
+  window.addEventListener("load", () => {
+    navigator.serviceWorker
+      .register("/sw.js", { scope: "/" })
+      .catch((err) => {
+        // Falha silenciosa — o app continua funcionando normalmente online
+        console.warn("[PWA] Service Worker não registrado:", err);
+      });
+  });
+}
+
+registerServiceWorker();
+
 function NotFoundComponent() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
@@ -77,6 +96,11 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     meta: [
       { charSet: "utf-8" },
       { name: "viewport", content: "width=device-width, initial-scale=1" },
+      { name: "theme-color", content: "#0ea5e9" },
+      { name: "mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-capable", content: "yes" },
+      { name: "apple-mobile-web-app-status-bar-style", content: "default" },
+      { name: "apple-mobile-web-app-title", content: "Ilha das Letrinhas" },
       { title: "Lovable App" },
       { name: "description", content: "An engaging educational game for children, combining alphabet learning with basic math operations." },
       { name: "author", content: "Lovable" },
@@ -94,6 +118,14 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       {
         rel: "stylesheet",
         href: appCss,
+      },
+      {
+        rel: "manifest",
+        href: "/manifest.webmanifest",
+      },
+      {
+        rel: "apple-touch-icon",
+        href: "/res/mipmap-xxxhdpi/ic_launcher.png",
       },
     ],
   }),
