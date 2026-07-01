@@ -866,10 +866,15 @@ function Game() {
       <header className="px-5 pt-6 pb-3 flex items-center justify-between max-w-3xl mx-auto">
         <button
           onClick={() => setScreen("map")}
-          className="font-display text-2xl md:text-3xl text-foreground"
+          className="flex items-center gap-2 font-display text-2xl md:text-3xl text-foreground"
           aria-label="Voltar ao mapa"
         >
-          🏝️ Ilha das Letrinhas
+          <img
+            src="/1024.png"
+            alt="Logo Ilha das Letrinhas"
+            className="w-10 h-10 md:w-12 md:h-12 rounded-xl object-cover"
+          />
+          Ilha das Letrinhas
         </button>
         <div className="flex items-center gap-2 bg-card chunky-shadow-sm rounded-full px-4 py-2 border border-border">
           <Star />
@@ -889,6 +894,13 @@ function Game() {
 function MapScreen({ onPick }: { onPick: (s: Screen) => void }) {
   return (
     <div className="text-center pt-6">
+      <div className="flex justify-center mb-2">
+        <img
+          src="/1024.png"
+          alt="Ilha das Letrinhas e Numerinhos"
+          className="w-24 h-24 md:w-32 md:h-32 rounded-3xl object-cover chunky-shadow"
+        />
+      </div>
       <div className="flex justify-center animate-floaty">
         <Polvinho mood="cheer" size={160} />
       </div>

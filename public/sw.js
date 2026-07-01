@@ -1,48 +1,69 @@
 // ============================================================
 // sw.js — Service Worker da Ilha das Letrinhas e Numerinhos
 //
-// Estratégia:
-//  - INSTALL:  pré-cacheia a shell mínima (/, CSS, JS principal)
-//  - ACTIVATE: remove caches de versões antigas
-//  - FETCH:    cache-first para assets estáticos com hash no nome;
-//              network-first com fallback para o restante (rotas SSR)
+// Estratégia para app SSR (TanStack Start + Vite):
 //
-// O CACHE_VERSION deve ser atualizado a cada deploy para invalidar
-// o cache antigo e forçar o SW a baixar os novos assets.
+//  INSTALL:  pré-cacheia apenas o manifest e ícones (URLs fixas conhecidas).
+//            NÃO tenta cachear "/" porque é SSR e pode falhar sem rede.
+//
+//  ACTIVATE: remove caches de versões anteriores.
+//
+//  FETCH:    cache-first para assets com hash (JS, CSS, fontes, imagens)
+//              → são imutáveis; uma vez no cache, nunca expiram
+//            stale-while-revalidate para "/" e rotas de navegação
+//              → serve o cache imediatamente, atualiza em background
+//            passthrough para tudo mais (POST, APIs externas, etc.)
+//
+// Como o offline funciona na prática:
+//  1ª visita (online):  browser baixa tudo → SW interceta e salva no cache
+//  2ª visita (offline): SW serve JS/CSS do cache; "/" vem do cache também
+//  Atualização de código: mude CACHE_VERSION → SW limpa o cache antigo
 // ============================================================
 
-const CACHE_VERSION = "v1";
-const CACHE_NAME = `ilha-letrinhas-${CACHE_VERSION}`;
+const CACHE_VERSION = "v2";
+const CACHE_STATIC  = `ilha-static-${CACHE_VERSION}`;   // assets com hash
+const CACHE_PAGES   = `ilha-pages-${CACHE_VERSION}`;    // HTML das rotas
 
-// Assets mínimos para a shell funcionar offline
-// O Vite injeta hashes nos nomes — o SW captura tudo via fetch handler
-const PRECACHE_URLS = ["/"];
+// URLs de instalação: apenas arquivos com caminhos fixos e previsíveis
+const PRECACHE_URLS = [
+  "/manifest.webmanifest",
+  "/res/mipmap-xxxhdpi/ic_launcher.png",
+  "/play_store_512.png",
+];
 
 // ── Install ──────────────────────────────────────────────────
 
 self.addEventListener("install", (event) => {
   event.waitUntil(
     caches
-      .open(CACHE_NAME)
-      .then((cache) => cache.addAll(PRECACHE_URLS))
-      .then(() => self.skipWaiting()) // ativa imediatamente sem esperar tab fechar
+      .open(CACHE_STATIC)
+      .then((cache) =>
+        // ignoreVary + individual adds para não falhar se um asset não existir
+        Promise.allSettled(
+          PRECACHE_URLS.map((url) =>
+            cache.add(new Request(url, { cache: "reload" })).catch(() => {})
+          )
+        )
+      )
+      .then(() => self.skipWaiting())
   );
 });
 
 // ── Activate ─────────────────────────────────────────────────
 
 self.addEventListener("activate", (event) => {
+  const validCaches = new Set([CACHE_STATIC, CACHE_PAGES]);
   event.waitUntil(
     caches
       .keys()
       .then((keys) =>
         Promise.all(
           keys
-            .filter((key) => key !== CACHE_NAME)
+            .filter((key) => !validCaches.has(key))
             .map((key) => caches.delete(key))
         )
       )
-      .then(() => self.clients.claim()) // controla todas as abas imediatamente
+      .then(() => self.clients.claim())
   );
 });
 
@@ -52,77 +73,104 @@ self.addEventListener("fetch", (event) => {
   const { request } = event;
   const url = new URL(request.url);
 
-  // Ignora requisições não-GET e de outros origens (ex: fontes externas)
+  // Só intercepta GET do mesmo origin
   if (request.method !== "GET") return;
   if (url.origin !== self.location.origin) return;
 
-  // Assets com hash no nome (JS, CSS, imagens do Vite) → cache-first
-  // Padrão: /_assets/... ou /assets/... com extensão estática
-  const isHashedAsset =
-    /\/_assets\//.test(url.pathname) ||
-    /\/assets\//.test(url.pathname) ||
-    /\.(js|css|woff2?|ttf|otf|png|jpg|jpeg|svg|ico|webp)(\?|$)/.test(
-      url.pathname
-    );
+  // ── Assets imutáveis com hash no nome → cache-first permanente ──────────
+  // TanStack Start / Vite coloca assets em /_build/ ou /_assets/
+  const isImmutableAsset =
+    /^\/_build\//.test(url.pathname) ||
+    /^\/_assets\//.test(url.pathname) ||
+    /^\/assets\//.test(url.pathname) ||
+    /\.(woff2?|ttf|otf)(\?|$)/.test(url.pathname);
 
-  if (isHashedAsset) {
-    event.respondWith(cacheFirst(request));
+  if (isImmutableAsset) {
+    event.respondWith(cacheFirstImmutable(request));
     return;
   }
 
-  // Navegação e rotas SSR → network-first com fallback para cache
-  event.respondWith(networkFirst(request));
+  // ── Imagens e arquivos estáticos com nome fixo → cache-first com revalidação ──
+  const isStaticFile =
+    /\.(png|jpg|jpeg|svg|ico|webp|gif)(\?|$)/.test(url.pathname) ||
+    url.pathname === "/manifest.webmanifest" ||
+    url.pathname.startsWith("/res/") ||
+    /\.(js|css)(\?|$)/.test(url.pathname);
+
+  if (isStaticFile) {
+    event.respondWith(staleWhileRevalidate(request, CACHE_STATIC));
+    return;
+  }
+
+  // ── Rotas de navegação (HTML gerado pelo SSR) → stale-while-revalidate ──
+  if (request.headers.get("accept")?.includes("text/html")) {
+    event.respondWith(staleWhileRevalidate(request, CACHE_PAGES));
+    return;
+  }
+
+  // ── Tudo mais: passa direto para a rede ─────────────────────────────────
 });
 
-// ── Estratégias de cache ──────────────────────────────────────
+// ── Estratégias ───────────────────────────────────────────────
 
 /**
- * Cache-first: retorna do cache se disponível; caso contrário busca na rede
- * e armazena a resposta para próximas requisições.
+ * Cache-first imutável: se está no cache, retorna sem nem verificar a rede.
+ * Assets com hash nunca mudam — são seguros para cache permanente.
  */
-async function cacheFirst(request) {
+async function cacheFirstImmutable(request) {
   const cached = await caches.match(request);
   if (cached) return cached;
 
   try {
     const response = await fetch(request);
     if (response.ok) {
-      const cache = await caches.open(CACHE_NAME);
+      const cache = await caches.open(CACHE_STATIC);
       cache.put(request, response.clone());
     }
     return response;
   } catch {
-    // Sem rede e sem cache: retorna 504
-    return new Response("Offline — asset não encontrado no cache.", {
+    return new Response("Asset offline e não encontrado no cache.", {
       status: 504,
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      statusText: "Gateway Timeout",
     });
   }
 }
 
 /**
- * Network-first: tenta a rede; em caso de falha retorna o cache.
- * Se nem cache existir, retorna a shell "/" como fallback.
+ * Stale-while-revalidate: retorna o cache imediatamente (se existir)
+ * e atualiza o cache em background com a resposta da rede.
+ * Se offline e não há cache, retorna 503.
  */
-async function networkFirst(request) {
-  try {
-    const response = await fetch(request);
-    if (response.ok) {
-      const cache = await caches.open(CACHE_NAME);
-      cache.put(request, response.clone());
-    }
-    return response;
-  } catch {
-    const cached = await caches.match(request);
-    if (cached) return cached;
+async function staleWhileRevalidate(request, cacheName) {
+  const cache  = await caches.open(cacheName);
+  const cached = await cache.match(request);
 
-    // Fallback final: retorna a shell do app (SPA offline)
-    const shell = await caches.match("/");
-    if (shell) return shell;
+  const networkFetch = fetch(request)
+    .then((response) => {
+      if (response.ok) {
+        cache.put(request, response.clone());
+      }
+      return response;
+    })
+    .catch(() => null);
 
-    return new Response("Você está offline.", {
-      status: 503,
-      headers: { "Content-Type": "text/plain; charset=utf-8" },
-    });
+  if (cached) {
+    // Atualiza em background, retorna o cache agora
+    event.waitUntil(networkFetch);
+    return cached;
   }
+
+  // Sem cache: espera a rede
+  const response = await networkFetch;
+  if (response) return response;
+
+  // Sem rede e sem cache: fallback para a página inicial cacheada
+  const shell = await caches.match("/", { cacheName: CACHE_PAGES });
+  if (shell) return shell;
+
+  return new Response("Você está offline.", {
+    status: 503,
+    statusText: "Service Unavailable",
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+  });
 }
