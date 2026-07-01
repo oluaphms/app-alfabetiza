@@ -893,25 +893,18 @@ function Game() {
 
 function MapScreen({ onPick }: { onPick: (s: Screen) => void }) {
   return (
-    <div className="text-center pt-6">
-      <div className="flex justify-center mb-2">
+    <div className="text-center pt-4">
+      {/* Logo principal — substitui Polvinho + frase de boas-vindas */}
+      <div className="flex justify-center mb-8">
         <img
           src="/1024.png"
           alt="Ilha das Letrinhas e Numerinhos"
-          className="w-24 h-24 md:w-32 md:h-32 rounded-3xl object-cover chunky-shadow"
+          className="w-52 h-52 md:w-64 md:h-64 rounded-4xl object-cover chunky-shadow"
+          draggable={false}
         />
       </div>
-      <div className="flex justify-center animate-floaty">
-        <Polvinho mood="cheer" size={160} />
-      </div>
-      <h1 className="font-display font-bold text-4xl md:text-5xl mt-4 text-foreground">
-        Oi! Eu sou o Polvinho!
-      </h1>
-      <p className="font-body text-lg md:text-xl mt-2 text-muted-foreground max-w-xl mx-auto">
-        Escolha um reino pra gente brincar e ganhar estrelinhas ⭐
-      </p>
 
-      <div className="grid sm:grid-cols-2 gap-5 mt-10">
+      <div className="grid sm:grid-cols-2 gap-5 mt-2">
         <ReinoCard
           title="Reino das Letras"
           emoji="🔤"
